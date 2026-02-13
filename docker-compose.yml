@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  crop-ai:
+    build: .
+    container_name: crop-capital-ai
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount models directory to persist trained models
+      - ./models:/app/models
+      # Mount training data if needed
+      - ./training_data:/app/training_data
+      # Mount outputs
+      - ./outputs:/app/outputs
+    environment:
+      # Add Sentinel Hub credentials if using real satellite data
+      - SENTINEL_HUB_CLIENT_ID=${SENTINEL_HUB_CLIENT_ID:-}
+      - SENTINEL_HUB_CLIENT_SECRET=${SENTINEL_HUB_CLIENT_SECRET:-}
+      - FLASK_ENV=production
+    restart: unless-stopped
+    networks:
+      - crop-ai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  crop-ai-network:
+    driver: bridge
+
+# Optional: Add Redis for caching satellite data
+# redis:
+#   image: redis:7-alpine
+#   container_name: crop-ai-cache
+#   ports:
+#     - "6379:6379"
+#   networks:
+#     - crop-ai-network
