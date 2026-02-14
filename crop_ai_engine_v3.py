@@ -12,6 +12,8 @@ from flask_cors import CORS
 import requests
 from datetime import datetime, timedelta
 import json
+import tensorflow as tf
+from tensorflow.keras import layers, models, callbacks
 
 # ML Libraries
 try:
@@ -385,65 +387,118 @@ class CropClassifier:
 # ==========================================
 # 4. SYNTHETIC TRAINING DATA GENERATOR
 # ==========================================
-def generate_training_data(n_samples=1000):
-    """
-    Generate synthetic training data with realistic crop signatures
-    This simulates different crop types based on real spectral patterns
-    """
-    print(f"[DataGen] Generating {n_samples} training samples...")
-    
-    import pandas as pd
-    
-    X = []
-    y = []
-    
-    crop_profiles = {
-        0: {'ndvi': (0.6, 0.85), 'evi': (0.4, 0.7), 'nir_mean': (0.4, 0.6)},  # Paddy
-        1: {'ndvi': (0.5, 0.75), 'evi': (0.3, 0.6), 'nir_mean': (0.35, 0.55)},  # Wheat
-        2: {'ndvi': (0.45, 0.7), 'evi': (0.3, 0.5), 'nir_mean': (0.3, 0.5)},  # Cotton
-        3: {'ndvi': (0.7, 0.9), 'evi': (0.5, 0.8), 'nir_mean': (0.5, 0.7)},  # Sugarcane
-        4: {'ndvi': (0.5, 0.8), 'evi': (0.35, 0.65), 'nir_mean': (0.35, 0.6)},  # Maize
-        5: {'ndvi': (0.55, 0.8), 'evi': (0.4, 0.7), 'nir_mean': (0.4, 0.6)},  # Soybean
-        6: {'ndvi': (0.45, 0.7), 'evi': (0.3, 0.6), 'nir_mean': (0.3, 0.55)},  # Pulses
-        7: {'ndvi': (0.5, 0.75), 'evi': (0.35, 0.65), 'nir_mean': (0.35, 0.55)},  # Vegetables
-        8: {'ndvi': (0.1, 0.3), 'evi': (0.05, 0.2), 'nir_mean': (0.1, 0.25)},  # Barren
-    }
-    
-    for crop_id, profile in crop_profiles.items():
-        n = n_samples // len(crop_profiles)
-        
-        for _ in range(n):
-            # Generate realistic features with some variance
-            ndvi = np.random.uniform(*profile['ndvi'])
-            evi = np.random.uniform(*profile['evi'])
-            nir_mean = np.random.uniform(*profile['nir_mean'])
-            
-            sample = {
-                'ndvi_mean': ndvi + np.random.normal(0, 0.05),
-                'ndvi_std': np.random.uniform(0.05, 0.15),
-                'ndvi_max': min(1.0, ndvi + np.random.uniform(0.1, 0.2)),
-                'ndvi_min': max(-1.0, ndvi - np.random.uniform(0.1, 0.2)),
-                'evi_mean': evi + np.random.normal(0, 0.05),
-                'savi_mean': ndvi * 0.9 + np.random.normal(0, 0.03),
-                'gci_mean': np.random.uniform(0.5, 3.0),
-                'red_mean': np.random.uniform(0.1, 0.3),
-                'nir_mean': nir_mean,
-                'green_mean': np.random.uniform(0.2, 0.4),
-                'blue_mean': np.random.uniform(0.1, 0.25),
-                'nir_red_ratio': nir_mean / (0.2 + np.random.uniform(0, 0.1)),
-                'green_red_ratio': np.random.uniform(1.0, 2.0),
-                'red_variance': np.random.uniform(0.001, 0.01),
-                'nir_variance': np.random.uniform(0.001, 0.02),
-                'vegetation_coverage': ndvi * 100 + np.random.normal(0, 10),
-                'high_vigor_pct': max(0, (ndvi - 0.6) * 100 + np.random.normal(0, 10)),
-                'bare_soil_pct': max(0, (1 - ndvi) * 50 + np.random.normal(0, 10)),
-            }
-            
-            X.append(sample)
-            y.append(crop_id)
-    
-    return pd.DataFrame(X), np.array(y)
 
+
+# --- 1. SETTINGS ---
+DATA_DIR = 'training_data/'  
+IMG_HEIGHT = 224
+IMG_WIDTH = 224
+BATCH_SIZE = 32
+
+# --- 2. LOAD & AUGMENT DATA ---
+# Training set with 20% validation split
+train_ds = tf.keras.utils.image_dataset_from_directory(
+    DATA_DIR,
+    validation_split=0.2,
+    subset="training",
+    seed=123,
+    image_size=(IMG_HEIGHT, IMG_WIDTH),
+    batch_size=BATCH_SIZE,
+    label_mode='categorical'
+)
+
+val_ds = tf.keras.utils.image_dataset_from_directory(
+    DATA_DIR,
+    validation_split=0.2,
+    subset="validation",
+    seed=123,
+    image_size=(IMG_HEIGHT, IMG_WIDTH),
+    batch_size=BATCH_SIZE,
+    label_mode='categorical'
+)
+
+# New: Data Augmentation Layer (Helps the model generalize better)
+data_augmentation = tf.keras.Sequential([
+  layers.RandomFlip("horizontal_and_vertical"),
+  layers.RandomRotation(0.2),
+  layers.RandomZoom(0.1),
+])
+
+# Optimize performance for your MacBook
+AUTOTUNE = tf.data.AUTOTUNE
+train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=AUTOTUNE)
+val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+
+# --- 3. MODEL ARCHITECTURE ---
+num_classes = len(train_ds.class_names)
+
+model = models.Sequential([
+    # Standardize input
+    layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
+    data_augmentation, 
+    layers.Rescaling(1./255),
+    
+    # Feature Extraction (Deep Layers)
+    layers.Conv2D(32, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(128, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Classification Head
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.5), # Crucial for overcoming the 80% plateau
+    layers.Dense(num_classes, activation='softmax')
+])
+
+# --- 4. CALLBACKS (The "Brains" of Training) ---
+# EarlyStopping: Stops if the model stops getting better
+# ReduceLROnPlateau: Lowers the learning rate if training gets "stuck"
+training_callbacks = [
+    callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
+    callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6)
+]
+
+# --- 5. COMPILATION & TRAINING ---
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+print(f"🚀 Detected Classes: {train_ds.class_names}")
+
+history = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=30, # Increased epochs because EarlyStopping will handle the exit
+    callbacks=training_callbacks
+)
+
+# --- 6. VISUALIZE RESULTS ---
+# This creates a chart of your accuracy and loss
+acc = history.history['accuracy']
+val_acc = history.history['val_accuracy']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(acc, label='Training Acc')
+plt.plot(val_acc, label='Validation Acc')
+plt.title('Accuracy Over Time')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(loss, label='Training Loss')
+plt.plot(val_loss, label='Validation Loss')
+plt.title('Loss Over Time')
+plt.legend()
+plt.show()
+
+model.save('crop_ai_v3_final.h5')
 # ==========================================
 # 5. FINANCIAL ENGINE (Unchanged)
 # ==========================================
