@@ -512,7 +512,7 @@ def initialize_system():
 initialize_system()
 
 # ==========================================
-# 7. MAIN API ENDPOINT
+# 7. MAIN API ENDPOINT (FIXED)
 # ==========================================
 @app.route('/analyze-farm', methods=['POST'])
 def analyze_farm():
@@ -535,6 +535,9 @@ def analyze_farm():
         print("[ML] Running crop classification...")
         crop_type, confidence = crop_classifier.predict(features)
         
+        # FIX 1: Convert numpy float to python float
+        confidence = float(confidence)
+        
         print(f"[ML] Detected: {crop_type} (Confidence: {confidence:.2%})")
         
         # PHASE 4: Financial Calculation
@@ -553,11 +556,13 @@ def analyze_farm():
             "Barren/Fallow": 0
         }
         
-        acres = data.get('acres', 2.5)
+        # FIX 2: Ensure acres is a standard float
+        acres = float(data.get('acres', 2.5))
         scale_of_finance = crop_scales.get(crop_type, 40000)
         
         # Health adjustment based on NDVI
-        ndvi_mean = features['ndvi_mean']
+        # FIX 3: Convert numpy float to python float
+        ndvi_mean = float(features['ndvi_mean'])
         health_factor = max(0.3, min(1.0, ndvi_mean / 0.7))
         
         base_crop_limit = scale_of_finance * acres * health_factor
@@ -577,12 +582,13 @@ def analyze_farm():
         graph_base64 = generate_kcc_breakdown(base_crop_limit)
         
         # Build Response
+        # FIX 4: Ensure all remaining numpy types are converted
         response = {
             "status": "success",
             "crop_identification": {
                 "detected_crop": crop_type,
                 "confidence": round(confidence * 100, 1),
-                "alternative_crops": []  # Can add top 3 predictions
+                "alternative_crops": [] 
             },
             "score_card": {
                 "total_credit_score": credit_score,
@@ -596,9 +602,9 @@ def analyze_farm():
             },
             "satellite_metrics": {
                 "ndvi_index": round(ndvi_mean, 3),
-                "vegetation_coverage": round(features['vegetation_coverage'], 2),
-                "high_vigor_area": round(features['high_vigor_pct'], 2),
-                "bare_soil_pct": round(features['bare_soil_pct'], 2)
+                "vegetation_coverage": round(float(features['vegetation_coverage']), 2),
+                "high_vigor_area": round(float(features['high_vigor_pct']), 2),
+                "bare_soil_pct": round(float(features['bare_soil_pct']), 2)
             },
             "graph_image": f"data:image/png;base64,{graph_base64}"
         }
